@@ -2,9 +2,28 @@
 @import "tailwindcss/utilities";
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
+@layer base, components, utilities;
+
+#quizler-root {
+  all: initial;
+  display: block;
+  color: #1c1b1f;
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: 0.1px;
+}
+
 #quizler-root,
 #quizler-root * {
   box-sizing: border-box;
+}
+
+#quizler-root * {
+  color: inherit;
+  font-family: inherit;
+}
+
+#quizler-root button {
+  cursor: pointer;
 }
 
 @keyframes quizler-reveal {
@@ -25,5 +44,18 @@
   }
   50% {
     transform: translateY(-2px);
+  }
+}
+
+/* Improve touch interactions on mobile */
+@media (max-width: 480px) {
+  #quizler-root button {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  
+  #quizler-root {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
