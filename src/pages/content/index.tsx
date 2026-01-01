@@ -1,7 +1,46 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createClient } from "@supabase/supabase-js";
 import "./style.css";
+
+// Custom storage adapter for Chrome extension
+const chromeStorageAdapter = {
+  getItem: async (key: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([key], (result) => {
+        resolve(result[key] ?? null);
+      });
+    });
+  },
+  setItem: async (key: string, value: string): Promise<void> => {
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [key]: value }, () => {
+        resolve();
+      });
+    });
+  },
+  removeItem: async (key: string): Promise<void> => {
+    return new Promise((resolve) => {
+      chrome.storage.local.remove([key], () => {
+        resolve();
+      });
+    });
+  },
+};
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY,
+  {
+    auth: {
+      storage: chromeStorageAdapter,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,
+    },
+  }
+);
 
 const ROOT_ID = "quizler-root";
 
@@ -72,6 +111,98 @@ function QuizlerWidget() {
   const [questionIndex, setQuestionIndex] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
+
+  // Auth state
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signup");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authOtp, setAuthOtp] = useState("");
+  const [authStep, setAuthStep] = useState<"email" | "otp">("email");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [session, setSession] = useState<unknown>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        setShowAuthModal(false);
+        setAuthMessage(null);
+        setAuthStep("email");
+        setAuthOtp("");
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSendOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail,
+      options: {
+        shouldCreateUser: true,
+      },
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+    } else {
+      setAuthStep("otp");
+      setAuthMessage("Check your email for the code!");
+    }
+    setAuthLoading(false);
+  };
+
+  const handleGithubSignIn = async () => {
+    setAuthLoading(true);
+    setAuthMessage(null);
+
+    const redirectTo = chrome.runtime.getURL("src/pages/options/index.html");
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "github",
+      options: {
+        redirectTo,
+      },
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      setAuthLoading(false);
+    }
+    // Don't set loading to false on success - user will be redirected
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+
+    const { error } = await supabase.auth.verifyOtp({
+      email: authEmail,
+      token: authOtp,
+      type: authMode === "signup" ? "signup" : "email",
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      console.error("OTP verification error:", error);
+    } else {
+      // Success - close modal
+      setShowAuthModal(false);
+    }
+    setAuthLoading(false);
+  };
 
   useEffect(() => {
     let frame = 0;
@@ -464,6 +595,10 @@ function QuizlerWidget() {
                             <button
                               className="w-full bg-white text-[#1f6f65] rounded-[14px] px-4 py-3 text-[13px] font-bold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_8px_20px_rgba(0,0,0,0.15)] active:scale-95"
                               type="button"
+                              onClick={() => {
+                                setAuthMode("signup");
+                                setShowAuthModal(true);
+                              }}
                               style={{
                                 color: "#1f6f65",
                                 backgroundColor: "white",
@@ -471,7 +606,7 @@ function QuizlerWidget() {
                               }}>
                               <span
                                 style={{ color: "#1f6f65", fontWeight: "700" }}>
-                                Create Account & Save Progress
+                                {session ? "View Leaderboard" : "Create Account & Save Progress"}
                               </span>
                             </button>
                           </div>
@@ -538,6 +673,247 @@ function QuizlerWidget() {
           </span>
         </span>
       </button>
+
+      {/* Auth Modal */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <motion.div
+            className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/50"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowAuthModal(false)}>
+            <motion.div
+              className="w-[340px] max-w-[calc(100vw-32px)] rounded-[22px] border-2 border-[#1c1b1f] bg-[#f7f2e9] p-5 shadow-[0_24px_50px_rgba(20,30,28,0.5)]"
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ type: "spring", stiffness: 240, damping: 22 }}
+              onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="grid h-[30px] w-[30px] place-items-center rounded-[10px] bg-[#2b8a7f] font-bold text-white shadow-[0_2px_4px_rgba(31,111,101,0.3)]">
+                    Q
+                  </div>
+                  <div className="text-[16px] font-bold text-[#1c1b1f]">
+                    {authMode === "signup" ? "Create Account" : "Sign In"}
+                  </div>
+                </div>
+                <button
+                  className="grid h-7 w-7 cursor-pointer place-items-center rounded-[9px] bg-[#e4d8c7] text-[16px] font-bold text-[#6a4400] transition hover:bg-[#d9c7ad]"
+                  type="button"
+                  onClick={() => setShowAuthModal(false)}
+                  aria-label="Close">
+                  ×
+                </button>
+              </div>
+
+              {/* Description */}
+              <p className="text-[13px] text-[#6a4400] mb-4">
+                {authMode === "signup"
+                  ? "Sign up to save your quiz results, track progress, and compete on the leaderboard."
+                  : "Welcome back! Sign in to access your quiz history."}
+              </p>
+
+              {/* Form */}
+              {authStep === "email" ? (
+                <div className="space-y-3">
+                  {/* GitHub Sign In - Primary */}
+                  <button
+                    type="button"
+                    onClick={handleGithubSignIn}
+                    disabled={authLoading}
+                    className="w-full rounded-[12px] px-4 py-3 text-[14px] font-semibold transition duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_10px_20px_rgba(16,28,26,0.25)] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center gap-2"
+                    style={{
+                      backgroundColor: "#24292e",
+                      border: "2px solid #24292e",
+                      color: "#ffffff",
+                    }}>
+                    <svg style={{ width: 20, height: 20, fill: "#ffffff" }} viewBox="0 0 24 24">
+                      <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+                    </svg>
+                    <span style={{ color: "#ffffff", fontWeight: 600 }}>
+                      {authLoading ? "Opening GitHub..." : "Continue with GitHub"}
+                    </span>
+                  </button>
+
+                  {/* Divider */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ flex: 1, height: 1, backgroundColor: "#e4d8c7" }}></div>
+                    <span style={{ fontSize: 11, color: "#a89f8f", fontWeight: 500 }}>or use email</span>
+                    <div style={{ flex: 1, height: 1, backgroundColor: "#e4d8c7" }}></div>
+                  </div>
+
+                  {/* Email Form */}
+                  <form onSubmit={handleSendOtp} className="space-y-3">
+                    <div>
+                      <input
+                        type="email"
+                        placeholder="Enter your email"
+                        value={authEmail}
+                        onChange={(e) => setAuthEmail(e.target.value)}
+                        required
+                        className="w-full rounded-[12px] border-2 border-[#e4d8c7] bg-white px-4 py-3 text-[14px] text-[#1c1b1f] placeholder-[#a89f8f] outline-none transition focus:border-[#1f6f65] focus:shadow-[0_0_0_3px_rgba(31,111,101,0.15)]"
+                        style={{ backgroundColor: "#ffffff", color: "#1c1b1f" }}
+                      />
+                    </div>
+
+                    {authMessage && (
+                      <div
+                        style={{
+                          borderRadius: 10,
+                          padding: "8px 12px",
+                          fontSize: 12,
+                          fontWeight: 500,
+                          backgroundColor: authMessage.includes("Check your email") ? "#eaf6ee" : "#fdecec",
+                          color: authMessage.includes("Check your email") ? "#2e7d32" : "#c33d3d",
+                          border: `1px solid ${authMessage.includes("Check your email") ? "#c8e6c9" : "#f5c6c6"}`,
+                        }}>
+                        {authMessage}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full rounded-[12px] px-4 py-3 text-[14px] font-semibold transition duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_6px_16px_rgba(31,111,101,0.15)] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+                      style={{
+                        backgroundColor: "#ffffff",
+                        border: "2px solid #e4d8c7",
+                        color: "#1c1b1f",
+                      }}>
+                      <span style={{ color: "#1c1b1f", fontWeight: 600 }}>
+                        {authLoading ? "Sending..." : "Send Code"}
+                      </span>
+                    </button>
+                  </form>
+                </div>
+              ) : (
+                <form onSubmit={handleVerifyOtp} className="space-y-3">
+                  {/* Success message */}
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      padding: "12px 16px",
+                      backgroundColor: "#eaf6ee",
+                      border: "1px solid #c8e6c9",
+                    }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#2e7d32", marginBottom: 4 }}>
+                      Code sent!
+                    </div>
+                    <div style={{ fontSize: 12, color: "#388e3c" }}>
+                      Check your email at <strong>{authEmail}</strong>
+                    </div>
+                  </div>
+
+                  {/* Code input */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 500, color: "#6a4400", marginBottom: 6 }}>
+                      Enter verification code
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="12345678"
+                      value={authOtp}
+                      onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                      required
+                      maxLength={8}
+                      className="w-full rounded-[12px] px-4 py-3 outline-none transition focus:shadow-[0_0_0_3px_rgba(31,111,101,0.15)]"
+                      style={{
+                        backgroundColor: "#ffffff",
+                        border: "2px solid #e4d8c7",
+                        color: "#1c1b1f",
+                        fontSize: 18,
+                        fontFamily: "monospace",
+                        textAlign: "center",
+                        letterSpacing: "0.25em",
+                      }}
+                    />
+                  </div>
+
+                  {/* Error message */}
+                  {authMessage && !authMessage.includes("Check your email") && (
+                    <div
+                      style={{
+                        borderRadius: 10,
+                        padding: "8px 12px",
+                        fontSize: 12,
+                        fontWeight: 500,
+                        backgroundColor: "#fdecec",
+                        color: "#c33d3d",
+                        border: "1px solid #f5c6c6",
+                      }}>
+                      {authMessage}
+                    </div>
+                  )}
+
+                  {/* Verify button */}
+                  <button
+                    type="submit"
+                    disabled={authLoading || authOtp.length < 6}
+                    className="w-full rounded-[12px] px-4 py-3 text-[14px] font-semibold transition duration-150 ease-out hover:-translate-y-0.5 hover:shadow-[0_10px_20px_rgba(16,28,26,0.25)] disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+                    style={{
+                      backgroundColor: "#1f6f65",
+                      border: "2px solid #1f6f65",
+                      color: "#ffffff",
+                    }}>
+                    <span style={{ color: "#ffffff", fontWeight: 600 }}>
+                      {authLoading ? "Verifying..." : "Verify Code"}
+                    </span>
+                  </button>
+
+                  {/* Back button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthStep("email");
+                      setAuthOtp("");
+                      setAuthMessage(null);
+                    }}
+                    style={{
+                      width: "100%",
+                      fontSize: 12,
+                      color: "#1f6f65",
+                      fontWeight: 500,
+                      backgroundColor: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: "8px 0",
+                    }}>
+                    Use different email
+                  </button>
+                </form>
+              )}
+
+              {/* Switch mode */}
+              <div className="mt-4 text-center text-[12px] text-[#6a4400]">
+                {authMode === "signup" ? (
+                  <>
+                    Already have an account?{" "}
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode("signin")}
+                      className="font-semibold text-[#1f6f65] underline underline-offset-2 hover:text-[#2b8a7f]">
+                      Sign In
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Don't have an account?{" "}
+                    <button
+                      type="button"
+                      onClick={() => setAuthMode("signup")}
+                      className="font-semibold text-[#1f6f65] underline underline-offset-2 hover:text-[#2b8a7f]">
+                      Sign Up
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

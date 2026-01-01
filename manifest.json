@@ -14,7 +14,7 @@
   "icons": {
     "128": "icon-128.png"
   },
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "storage"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
@@ -26,8 +26,8 @@
   "devtools_page": "src/pages/devtools/index.html",
   "web_accessible_resources": [
     {
-      "resources": ["contentStyle.css", "icon-128.png", "icon-32.png"],
-      "matches": []
+      "resources": ["contentStyle.css", "icon-128.png", "icon-32.png", "src/pages/options/index.html"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
