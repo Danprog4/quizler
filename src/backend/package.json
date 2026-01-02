@@ -3,9 +3,16 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:generate": "drizzle-kit generate"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.0.3",
+    "drizzle-kit": "^0.30.1",
     "tsx": "^4.21.0"
   },
   "peerDependencies": {
@@ -15,6 +22,8 @@
     "@openrouter/ai-sdk-provider": "^1.5.4",
     "ai": "^6.0.3",
     "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.38.3",
+    "postgres": "^3.4.5",
     "zod": "^4.2.1"
   }
 }

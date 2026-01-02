@@ -86,6 +86,16 @@ type QuizPayload = {
   questions: QuizItem[];
 };
 
+type LeaderboardEntry = {
+  user_id: string;
+  email: string;
+  avatar_url: string | null;
+  username: string | null;
+  total_quizzes: number;
+  total_score: number;
+  avg_percentage: number;
+};
+
 const isQuizPayload = (value: QuizPayload | null): value is QuizPayload =>
   Boolean(
     value &&
@@ -122,6 +132,63 @@ function QuizlerWidget() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [session, setSession] = useState<unknown>(null);
 
+  // Leaderboard state
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [resultSaved, setResultSaved] = useState(false);
+
+  // Pending result (for users who complete quiz before auth)
+  const [pendingResult, setPendingResult] = useState<{
+    score: number;
+    total: number;
+    percentage: number;
+  } | null>(null);
+
+  // Save quiz result to database
+  const saveQuizResult = useCallback(async (score: number, total: number, percentage: number) => {
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (!session?.user) {
+      // Save pending result for after auth
+      setPendingResult({ score, total, percentage });
+      return false;
+    }
+
+    const { error } = await supabase.from("quiz_results").insert({
+      user_id: session.user.id,
+      score,
+      total_questions: total,
+      percentage,
+      page_url: window.location.href,
+      page_title: document.title,
+    });
+
+    if (error) {
+      console.error("Error saving quiz result:", error);
+      return false;
+    }
+
+    setResultSaved(true);
+    return true;
+  }, []);
+
+  // Fetch leaderboard
+  const fetchLeaderboard = async () => {
+    setLeaderboardLoading(true);
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .select("*")
+      .limit(10);
+
+    if (error) {
+      console.error("Error fetching leaderboard:", error);
+    } else {
+      setLeaderboard(data || []);
+    }
+    setLeaderboardLoading(false);
+  };
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -129,18 +196,24 @@ function QuizlerWidget() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       if (session) {
         setShowAuthModal(false);
         setAuthMessage(null);
         setAuthStep("email");
         setAuthOtp("");
+
+        // Save pending result if exists
+        if (pendingResult) {
+          await saveQuizResult(pendingResult.score, pendingResult.total, pendingResult.percentage);
+          setPendingResult(null);
+        }
       }
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [pendingResult]);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -333,7 +406,16 @@ function QuizlerWidget() {
 
     // Handle completion of the last question
     setIsComplete(true);
-  }, [currentQuestion, isLastQuestion, selectedIndex, showResult]);
+
+    // Calculate final score (need to add 1 if current answer is correct since state hasn't updated yet)
+    const finalCorrect = selectedIndex === currentQuestion.correctIndex
+      ? correctCount + 1
+      : correctCount;
+    const percentage = Math.round((finalCorrect / totalQuestions) * 100);
+
+    // Save result (will be pending if not authenticated)
+    void saveQuizResult(finalCorrect, totalQuestions, percentage);
+  }, [currentQuestion, isLastQuestion, selectedIndex, showResult, correctCount, totalQuestions, saveQuizResult]);
 
   const fabClasses = [
     "grid h-[72px] w-[72px] cursor-pointer place-items-center rounded-[20px] border-0 p-1 transition duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(16,28,26,0.28)] max-[480px]:h-[64px] max-[480px]:w-[64px] max-[480px]:rounded-[18px] active:scale-95",
@@ -560,80 +642,267 @@ function QuizlerWidget() {
                   )}
                   {isComplete && (
                     <motion.div
-                      className="space-y-4 rounded-[20px] border-2 border-[#2e7d32] bg-gradient-to-b from-[#f8fff9] to-[#eaf6ee] p-5 shadow-[0_20px_40px_rgba(46,125,50,0.15)]"
+                      className="space-y-4"
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.25, ease: "easeOut" }}>
-                      {/* Header with celebration */}
-                      <div className="text-center space-y-2">
-                        <div className="text-[28px]">🎉</div>
-                        <div className="text-[16px] font-bold text-[#1b5e20]">
-                          Quiz Complete!
-                        </div>
-                        <div className="text-[12px] text-[#2e7d32] font-medium">
-                          Great work on testing your knowledge
-                        </div>
-                      </div>
 
-                      {/* Leaderboard & History CTA - MAIN FOCUS */}
-                      <div className="bg-gradient-to-r from-[#1f6f65] to-[#2b8a7f] rounded-[18px] p-5 text-white shadow-[0_12px_24px_rgba(31,111,101,0.3)]">
-                        <div className="flex items-start gap-3">
-                          <div className="text-[28px]">🏆</div>
-                          <div className="flex-1">
-                            <div
-                              style={{ color: "#ffffff" }}
-                              className="text-[16px] font-bold mb-2 text-white">
-                              Join the Leaderboard!
+                      {!showLeaderboard ? (
+                        <>
+                          {/* Quiz Complete Card */}
+                          <div
+                            style={{
+                              borderRadius: 20,
+                              border: "2px solid #2e7d32",
+                              background: "linear-gradient(to bottom, #f8fff9, #eaf6ee)",
+                              padding: 20,
+                              boxShadow: "0 20px 40px rgba(46,125,50,0.15)",
+                            }}>
+                            {/* Header */}
+                            <div style={{ textAlign: "center", marginBottom: 16 }}>
+                              <div style={{ fontSize: 28 }}>🎉</div>
+                              <div style={{ fontSize: 16, fontWeight: 700, color: "#1b5e20" }}>
+                                Quiz Complete!
+                              </div>
+                              <div style={{ fontSize: 12, color: "#2e7d32", fontWeight: 500 }}>
+                                Great work on testing your knowledge
+                              </div>
                             </div>
+
+                            {/* Score */}
                             <div
-                              style={{ color: "#ffffff" }}
-                              className="text-[12px] text-white/90 mb-4 leading-relaxed">
-                              Sign up to save your quiz history, compete with
-                              others, and track your learning progress over
-                              time.
-                            </div>
-                            <button
-                              className="w-full bg-white text-[#1f6f65] rounded-[14px] px-4 py-3 text-[13px] font-bold transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[0_8px_20px_rgba(0,0,0,0.15)] active:scale-95"
-                              type="button"
-                              onClick={() => {
-                                setAuthMode("signup");
-                                setShowAuthModal(true);
-                              }}
                               style={{
-                                color: "#1f6f65",
-                                backgroundColor: "white",
-                                fontWeight: "700",
+                                background: "#ffffff",
+                                borderRadius: 14,
+                                padding: "16px 20px",
+                                textAlign: "center",
+                                marginBottom: 16,
+                                border: "1px solid #c8e6c9",
                               }}>
-                              <span
-                                style={{ color: "#1f6f65", fontWeight: "700" }}>
-                                {session ? "View Leaderboard" : "Create Account & Save Progress"}
-                              </span>
+                              <div style={{ fontSize: 32, fontWeight: 700, color: "#1b5e20" }}>
+                                {correctCount} / {totalQuestions}
+                              </div>
+                              <div style={{ fontSize: 14, color: "#2e7d32", fontWeight: 500 }}>
+                                {Math.round((correctCount / totalQuestions) * 100)}% correct
+                              </div>
+                              {resultSaved && (
+                                <div style={{ fontSize: 11, color: "#66bb6a", marginTop: 4 }}>
+                                  ✓ Result saved
+                                </div>
+                              )}
+                              {pendingResult && !session && (
+                                <div style={{ fontSize: 11, color: "#f57c00", marginTop: 4 }}>
+                                  Sign in to save your score!
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action buttons */}
+                            {session ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowLeaderboard(true);
+                                  void fetchLeaderboard();
+                                }}
+                                style={{
+                                  width: "100%",
+                                  backgroundColor: "#1f6f65",
+                                  border: "none",
+                                  borderRadius: 14,
+                                  padding: "14px 20px",
+                                  color: "#ffffff",
+                                  fontSize: 14,
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  marginBottom: 8,
+                                }}>
+                                🏆 View Leaderboard
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAuthMode("signup");
+                                  setShowAuthModal(true);
+                                }}
+                                style={{
+                                  width: "100%",
+                                  backgroundColor: "#1f6f65",
+                                  border: "none",
+                                  borderRadius: 14,
+                                  padding: "14px 20px",
+                                  color: "#ffffff",
+                                  fontSize: 14,
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  marginBottom: 8,
+                                }}>
+                                🏆 Create Account & Join Leaderboard
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setIsOpen(false)}
+                              style={{
+                                width: "100%",
+                                backgroundColor: "transparent",
+                                border: "2px solid #c8e6c9",
+                                borderRadius: 12,
+                                padding: "10px 16px",
+                                color: "#2e7d32",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}>
+                              Continue Reading
                             </button>
                           </div>
-                        </div>
-                      </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Leaderboard View */}
+                          <div
+                            style={{
+                              borderRadius: 20,
+                              border: "2px solid #1f6f65",
+                              background: "linear-gradient(to bottom, #f0faf8, #e8f5f3)",
+                              padding: 16,
+                              boxShadow: "0 20px 40px rgba(31,111,101,0.15)",
+                            }}>
+                            {/* Header */}
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <span style={{ fontSize: 20 }}>🏆</span>
+                                <span style={{ fontSize: 16, fontWeight: 700, color: "#1f6f65" }}>Leaderboard</span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setShowLeaderboard(false)}
+                                style={{
+                                  backgroundColor: "#e4d8c7",
+                                  border: "none",
+                                  borderRadius: 8,
+                                  padding: "4px 8px",
+                                  fontSize: 12,
+                                  color: "#6a4400",
+                                  cursor: "pointer",
+                                  fontWeight: 500,
+                                }}>
+                                ← Back
+                              </button>
+                            </div>
 
-                      {/* Score display - De-emphasized */}
-                      <div className="bg-white/50 rounded-[12px] p-3 border border-[#e4d8c7]">
-                        <div className="flex items-center justify-between text-[#6a4400]">
-                          <div className="text-[12px] font-medium">
-                            Score: {correctCount} / {totalQuestions}
-                          </div>
-                          <div className="text-[14px] font-semibold">
-                            {Math.round((correctCount / totalQuestions) * 100)}%
-                          </div>
-                        </div>
-                      </div>
+                            {/* Leaderboard list */}
+                            {leaderboardLoading ? (
+                              <div style={{ textAlign: "center", padding: 20 }}>
+                                <div style={{ fontSize: 12, color: "#6a4400" }}>Loading...</div>
+                              </div>
+                            ) : leaderboard.length === 0 ? (
+                              <div style={{ textAlign: "center", padding: 20 }}>
+                                <div style={{ fontSize: 24, marginBottom: 8 }}>🎯</div>
+                                <div style={{ fontSize: 13, color: "#1f6f65", fontWeight: 600 }}>Be the first!</div>
+                                <div style={{ fontSize: 12, color: "#6a4400" }}>Complete more quizzes to appear here</div>
+                              </div>
+                            ) : (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                {leaderboard.map((entry, index) => (
+                                  <div
+                                    key={entry.user_id}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: 10,
+                                      backgroundColor: index === 0 ? "#fff8e1" : "#ffffff",
+                                      border: `1px solid ${index === 0 ? "#ffcc02" : "#e4d8c7"}`,
+                                      borderRadius: 12,
+                                      padding: "10px 12px",
+                                    }}>
+                                    {/* Rank */}
+                                    <div
+                                      style={{
+                                        width: 28,
+                                        height: 28,
+                                        borderRadius: 8,
+                                        backgroundColor: index === 0 ? "#ffcc02" : index === 1 ? "#e0e0e0" : index === 2 ? "#ffcc80" : "#f5f5f5",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        fontSize: 12,
+                                        fontWeight: 700,
+                                        color: index < 3 ? "#5d4037" : "#757575",
+                                      }}>
+                                      {index + 1}
+                                    </div>
 
-                      {/* Secondary action */}
-                      <button
-                        className="w-full text-[#2e7d32] border-2 border-[#c8e6c9] rounded-[12px] px-3 py-2 text-[12px] font-semibold transition duration-150 ease-out hover:bg-[#f1f8e9] hover:border-[#a5d6a7] active:scale-95"
-                        type="button"
-                        onClick={() => setIsOpen(false)}>
-                        <span style={{ color: "#2e7d32", fontWeight: "600" }}>
-                          Continue Reading
-                        </span>
-                      </button>
+                                    {/* Avatar */}
+                                    {entry.avatar_url ? (
+                                      <img
+                                        src={entry.avatar_url}
+                                        alt=""
+                                        style={{
+                                          width: 32,
+                                          height: 32,
+                                          borderRadius: "50%",
+                                          border: "2px solid #e4d8c7",
+                                        }}
+                                      />
+                                    ) : (
+                                      <div
+                                        style={{
+                                          width: 32,
+                                          height: 32,
+                                          borderRadius: "50%",
+                                          backgroundColor: "#1f6f65",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          color: "#ffffff",
+                                          fontSize: 14,
+                                          fontWeight: 600,
+                                        }}>
+                                        {(entry.username || entry.email)?.[0]?.toUpperCase() || "?"}
+                                      </div>
+                                    )}
+
+                                    {/* Name & stats */}
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div
+                                        style={{
+                                          fontSize: 13,
+                                          fontWeight: 600,
+                                          color: "#1c1b1f",
+                                          overflow: "hidden",
+                                          textOverflow: "ellipsis",
+                                          whiteSpace: "nowrap",
+                                        }}>
+                                        {entry.username || entry.email?.split("@")[0] || "Anonymous"}
+                                      </div>
+                                      <div style={{ fontSize: 11, color: "#6a4400" }}>
+                                        {entry.total_quizzes} quiz{entry.total_quizzes !== 1 ? "zes" : ""} · {entry.avg_percentage}% avg
+                                      </div>
+                                    </div>
+
+                                    {/* Score */}
+                                    <div
+                                      style={{
+                                        backgroundColor: "#eaf6ee",
+                                        borderRadius: 8,
+                                        padding: "4px 8px",
+                                        fontSize: 12,
+                                        fontWeight: 700,
+                                        color: "#2e7d32",
+                                      }}>
+                                      {entry.total_score} pts
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </motion.div>
                   )}
                 </>
