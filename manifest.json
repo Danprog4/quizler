@@ -5,6 +5,10 @@
   "options_ui": {
     "page": "src/pages/options/index.html"
   },
+  "background": {
+    "service_worker": "src/pages/background/index.ts",
+    "type": "module"
+  },
   "action": {
     "default_popup": "src/pages/popup/index.html",
     "default_icon": {
@@ -14,7 +18,7 @@
   "icons": {
     "128": "icon-128.png"
   },
-  "permissions": ["activeTab", "storage"],
+  "permissions": ["activeTab", "storage", "identity"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {

@@ -1,4 +1,5 @@
 const API_BASE_URL = "http://localhost:8787";
+const SUPABASE_URL = "https://uftctlsnhxijyrrajixw.supabase.co";
 
 type QuizRequest = {
   url: string;
@@ -8,6 +9,63 @@ type QuizRequest = {
 };
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Handle GitHub OAuth
+  if (message?.type === "quizler:github-auth") {
+    const handleGithubAuth = async () => {
+      try {
+        const redirectUrl = chrome.identity.getRedirectURL();
+
+        // Build the OAuth URL
+        const authUrl = new URL(`${SUPABASE_URL}/auth/v1/authorize`);
+        authUrl.searchParams.set("provider", "github");
+        authUrl.searchParams.set("redirect_to", redirectUrl);
+        authUrl.searchParams.set("scopes", "user:email");
+
+        // Launch the auth flow
+        const responseUrl = await chrome.identity.launchWebAuthFlow({
+          url: authUrl.toString(),
+          interactive: true,
+        });
+
+        if (responseUrl) {
+          // Extract the tokens from the response URL
+          const url = new URL(responseUrl);
+          const hashParams = new URLSearchParams(url.hash.substring(1));
+          const accessToken = hashParams.get("access_token");
+          const refreshToken = hashParams.get("refresh_token");
+
+          if (accessToken) {
+            sendResponse({
+              ok: true,
+              data: { accessToken, refreshToken }
+            });
+          } else {
+            sendResponse({
+              ok: false,
+              error: "No access token received"
+            });
+          }
+        } else {
+          sendResponse({
+            ok: false,
+            error: "Authentication was cancelled"
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Authentication failed";
+        // User closed the popup - not an error worth reporting
+        if (message.includes("canceled") || message.includes("closed")) {
+          sendResponse({ ok: false, error: "cancelled" });
+        } else {
+          sendResponse({ ok: false, error: message });
+        }
+      }
+    };
+
+    void handleGithubAuth();
+    return true;
+  }
+
   if (message?.type !== "quizler:generate") return false;
 
   const payload = message.payload as QuizRequest;

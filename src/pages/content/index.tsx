@@ -204,16 +204,26 @@ function QuizlerWidget() {
         setAuthStep("email");
         setAuthOtp("");
 
-        // Save pending result if exists
+        // Save pending result if exists, then show leaderboard
         if (pendingResult) {
-          await saveQuizResult(pendingResult.score, pendingResult.total, pendingResult.percentage);
+          const saved = await saveQuizResult(pendingResult.score, pendingResult.total, pendingResult.percentage);
           setPendingResult(null);
+
+          // Show leaderboard with fresh data after saving
+          if (saved && isComplete) {
+            setShowLeaderboard(true);
+            void fetchLeaderboard();
+          }
+        } else if (isComplete) {
+          // No pending result, just show leaderboard
+          setShowLeaderboard(true);
+          void fetchLeaderboard();
         }
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [pendingResult]);
+  }, [pendingResult, isComplete]);
 
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -240,20 +250,34 @@ function QuizlerWidget() {
     setAuthLoading(true);
     setAuthMessage(null);
 
-    const redirectTo = chrome.runtime.getURL("src/pages/options/index.html");
+    try {
+      // Send message to background script to handle OAuth
+      const response = await chrome.runtime.sendMessage({ type: "quizler:github-auth" });
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "github",
-      options: {
-        redirectTo,
-      },
-    });
+      if (response?.ok && response.data) {
+        const { accessToken, refreshToken } = response.data;
 
-    if (error) {
-      setAuthMessage(error.message);
-      setAuthLoading(false);
+        // Set the session
+        const { error } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken || "",
+        });
+
+        if (error) {
+          setAuthMessage(error.message);
+        } else {
+          // Success - modal will close via onAuthStateChange
+          setShowAuthModal(false);
+        }
+      } else if (response?.error && response.error !== "cancelled") {
+        setAuthMessage(response.error);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Authentication failed";
+      setAuthMessage(message);
     }
-    // Don't set loading to false on success - user will be redirected
+
+    setAuthLoading(false);
   };
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
