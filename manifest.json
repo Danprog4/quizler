@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "quizler",
-  "description": "turn docs into quizzes",
+  "name": "Quizler",
+  "version": "0.1.0",
+  "description": "Turn any documentation into interactive quizzes. Test your knowledge as you read!",
   "options_ui": {
     "page": "src/pages/options/index.html"
   },

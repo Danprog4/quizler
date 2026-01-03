@@ -1,4 +1,6 @@
-const API_BASE_URL = "http://localhost:8787";
+const API_BASE_URL = import.meta.env.DEV
+  ? "http://localhost:8787"
+  : "https://quizler-production-cdad.up.railway.app";
 const SUPABASE_URL = "https://uftctlsnhxijyrrajixw.supabase.co";
 
 type QuizRequest = {
@@ -37,22 +39,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (accessToken) {
             sendResponse({
               ok: true,
-              data: { accessToken, refreshToken }
+              data: { accessToken, refreshToken },
             });
           } else {
             sendResponse({
               ok: false,
-              error: "No access token received"
+              error: "No access token received",
             });
           }
         } else {
           sendResponse({
             ok: false,
-            error: "Authentication was cancelled"
+            error: "Authentication was cancelled",
           });
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Authentication failed";
+        const message =
+          error instanceof Error ? error.message : "Authentication failed";
         // User closed the popup - not an error worth reporting
         if (message.includes("canceled") || message.includes("closed")) {
           sendResponse({ ok: false, error: "cancelled" });
